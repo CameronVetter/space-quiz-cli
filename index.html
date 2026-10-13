@@ -429,6 +429,24 @@
       letter-spacing: -.08em;
     }
 
+    .mission-report {
+      max-width: 510px;
+      margin: 0 auto 1.8rem;
+      padding: 1.1rem;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--surface-strong);
+      text-align: left;
+      line-height: 1.5;
+    }
+
+    .mission-report h3 { margin: 0 0 .65rem; color: var(--purple-dark); }
+    .mission-report dl { margin: 0; }
+    .mission-report dl > div { margin-bottom: .6rem; }
+    .mission-report dt { color: var(--muted); font-size: .8rem; font-weight: 700; }
+    .mission-report dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+    .rank-guide { margin: .8rem 0 0; color: var(--muted); font-size: .75rem; }
+
     .sr-only {
       position: absolute;
       width: 1px;
@@ -526,8 +544,18 @@
         <h2 id="results-title">You made it through the stars.</h2>
         <p class="results-copy" id="results-copy"></p>
         <div class="final-score" id="final-score"></div>
+        <section class="mission-report" aria-labelledby="mission-report-title">
+          <h3 id="mission-report-title">Mission report</h3>
+          <dl>
+            <div><dt>Score</dt><dd id="report-score"></dd></div>
+            <div><dt>Rank</dt><dd id="report-rank"></dd></div>
+            <div><dt>Slowest question · time to first answer</dt><dd id="report-slowest"></dd></div>
+          </dl>
+          <p class="rank-guide">Ranks: Mission Commander 100% · Star Navigator 70–99% · Orbital Explorer 40–69% · Space Cadet 0–39%. Timing excludes feedback and Next question pauses; ties use the first question.</p>
+        </section>
         <div class="results-actions">
           <button class="share-button" id="share-button" type="button">Share result</button>
+          <button class="share-button" id="copy-button" type="button">Copy result</button>
           <button class="restart-button" id="restart-button" type="button">Play again <span aria-hidden="true">↗</span></button>
         </div>
         <p class="share-status" id="share-status" role="status" aria-live="polite"></p>
@@ -620,11 +648,18 @@
       const reactionEl = document.getElementById("reaction");
       const restartButton = document.getElementById("restart-button");
       const shareButton = document.getElementById("share-button");
+      const copyButton = document.getElementById("copy-button");
       const shareStatusEl = document.getElementById("share-status");
+      const reportScoreEl = document.getElementById("report-score");
+      const reportRankEl = document.getElementById("report-rank");
+      const reportSlowestEl = document.getElementById("report-slowest");
 
       let currentQuestion = 0;
       let score = 0;
       let answered = false;
+      let questionStartedAt = 0;
+      let answerTimes = [];
+      let missionReport = null;
 
       const formatNumber = (number) => String(number).padStart(2, "0");
 
@@ -655,10 +690,12 @@
         });
 
         answersEl.querySelector(".answer").focus();
+        questionStartedAt = performance.now();
       }
 
       function chooseAnswer(selectedIndex) {
         if (answered) return;
+        answerTimes[currentQuestion] = performance.now() - questionStartedAt;
         answered = true;
         const item = questions[currentQuestion];
         const answerButtons = [...answersEl.querySelectorAll(".answer")];
@@ -697,6 +734,19 @@
 
       function showResults() {
         const percentage = Math.round((score / questions.length) * 100);
+        const rank = percentage === 100 ? "Mission Commander"
+          : percentage >= 70 ? "Star Navigator"
+          : percentage >= 40 ? "Orbital Explorer" : "Space Cadet";
+        const slowestIndex = answerTimes.reduce((slowest, elapsed, index) =>
+          elapsed > answerTimes[slowest] ? index : slowest, 0);
+        const scoreText = `${score} / ${questions.length} (${percentage}%)`;
+        const slowestText = `Question ${slowestIndex + 1}: ${questions[slowestIndex].question} — ${(answerTimes[slowestIndex] / 1000).toFixed(1)} seconds`;
+        missionReport = {
+          text: `Orbit Academy mission report\nScore: ${scoreText}\nRank: ${rank}\nSlowest question (time to first answer): ${slowestText}`
+        };
+        reportScoreEl.textContent = scoreText;
+        reportRankEl.textContent = rank;
+        reportSlowestEl.textContent = slowestText;
         let reaction = "🛰️";
         let title = "Keep exploring.";
         let copy = "Every mission starts with curiosity. The cosmos has plenty more to teach you.";
@@ -727,6 +777,7 @@
       }
 
       function animateFinalScore(targetScore) {
+        const report = missionReport;
         const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         if (reducedMotion) {
           finalScoreEl.textContent = `${targetScore} / ${questions.length}`;
@@ -737,6 +788,7 @@
         const duration = 900;
 
         function updateScore(timestamp) {
+          if (report !== missionReport) return;
           const progress = Math.min((timestamp - startTime) / duration, 1);
           const easedProgress = 1 - Math.pow(1 - progress, 3);
           const displayedScore = Math.round(targetScore * easedProgress);
@@ -752,8 +804,15 @@
         shareStatusEl.className = type ? `share-status ${type}` : "share-status";
       }
 
-      function copyWithFallback(text) {
-        if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+      async function copyWithFallback(text, trigger, report) {
+        if (navigator.clipboard && window.isSecureContext) {
+          try {
+            await navigator.clipboard.writeText(text);
+            return;
+          } catch (error) {
+            if (report !== missionReport || resultsView.hidden) return;
+          }
+        }
         return new Promise((resolve, reject) => {
           const area = document.createElement("textarea");
           area.value = text;
@@ -765,32 +824,52 @@
           let ok = false;
           try { ok = document.execCommand("copy"); } catch (error) { ok = false; }
           area.remove();
-          shareButton.focus();
+          if (report === missionReport && !resultsView.hidden) trigger.focus();
           ok ? resolve() : reject(new Error("Copy failed"));
         });
       }
 
       async function shareResults() {
+        const report = missionReport;
+        if (!report || resultsView.hidden) return;
         const title = document.getElementById("quiz-title").textContent.trim();
-        const text = `I scored ${score}/${questions.length} on "${title}" Can you beat me?`;
+        const text = report.text;
         const url = /^https?:/.test(location.protocol) ? location.href : undefined;
         try {
           if (navigator.share) {
             await navigator.share(url ? { title, text, url } : { title, text });
-            setShareStatus("Result shared.", "good");
+            if (report === missionReport) setShareStatus("Result shared.", "good");
           } else {
-            await copyWithFallback(url ? `${text} ${url}` : text);
-            setShareStatus("Result copied to clipboard.", "good");
+            await copyWithFallback(url ? `${text}\n${url}` : text, shareButton, report);
+            if (report === missionReport) setShareStatus("Result copied to clipboard.", "good");
           }
         } catch (error) {
           if (error && error.name === "AbortError") return;
-          setShareStatus("Sharing failed. Please copy your score manually.", "bad");
+          if (report === missionReport) setShareStatus("Sharing failed. Please copy your mission report manually.", "bad");
+        }
+      }
+
+      async function copyResults() {
+        const report = missionReport;
+        if (!report || resultsView.hidden) return;
+        try {
+          await copyWithFallback(report.text, copyButton, report);
+          if (report === missionReport) setShareStatus("Result copied to clipboard.", "good");
+        } catch (error) {
+          if (report === missionReport) setShareStatus("Copy failed. Please select and copy your mission report manually.", "bad");
         }
       }
 
       function resetQuiz() {
         currentQuestion = 0;
         score = 0;
+        answerTimes = [];
+        questionStartedAt = 0;
+        missionReport = null;
+        reportScoreEl.textContent = "";
+        reportRankEl.textContent = "";
+        reportSlowestEl.textContent = "";
+        finalScoreEl.textContent = "";
         scoreEl.textContent = "0";
         setShareStatus("");
         quizView.hidden = false;
@@ -809,6 +888,7 @@
 
       restartButton.addEventListener("click", resetQuiz);
       shareButton.addEventListener("click", shareResults);
+      copyButton.addEventListener("click", copyResults);
 
       document.addEventListener("keydown", (event) => {
         if (resultsView.hidden && !answered && /^[1-4]$/.test(event.key)) {
