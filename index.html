@@ -356,6 +356,33 @@
 
     .next-button[hidden] { display: none; }
 
+    .results-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .8rem;
+      justify-content: center;
+    }
+
+    .share-button {
+      border: 2px solid var(--purple-dark);
+      border-radius: 999px;
+      padding: .85rem 1.4rem;
+      background: transparent;
+      color: var(--purple-dark);
+      font: inherit;
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    .share-button:hover, .share-button:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 4px rgba(112, 103, 245, .24);
+    }
+
+    .share-status { min-height: 1.5em; margin: 1rem 0 0; font-weight: 700; }
+    .share-status.good { color: var(--success); }
+    .share-status.bad { color: var(--danger); }
+
     .actions {
       display: flex;
       justify-content: flex-end;
@@ -499,7 +526,11 @@
         <h2 id="results-title">You made it through the stars.</h2>
         <p class="results-copy" id="results-copy"></p>
         <div class="final-score" id="final-score"></div>
-        <button class="restart-button" id="restart-button" type="button">Play again <span aria-hidden="true">↗</span></button>
+        <div class="results-actions">
+          <button class="share-button" id="share-button" type="button">Share result</button>
+          <button class="restart-button" id="restart-button" type="button">Play again <span aria-hidden="true">↗</span></button>
+        </div>
+        <p class="share-status" id="share-status" role="status" aria-live="polite"></p>
       </div>
     </section>
 
@@ -588,6 +619,8 @@
       const resultsCopyEl = document.getElementById("results-copy");
       const reactionEl = document.getElementById("reaction");
       const restartButton = document.getElementById("restart-button");
+      const shareButton = document.getElementById("share-button");
+      const shareStatusEl = document.getElementById("share-status");
 
       let currentQuestion = 0;
       let score = 0;
@@ -641,13 +674,22 @@
           scoreEl.textContent = String(score);
           answerButtons[selectedIndex].classList.remove("reveal");
           answerButtons[selectedIndex].classList.add("correct");
-          feedbackEl.textContent = `Correct! ${item.fact}`;
+          feedbackEl.textContent = `Correct! You chose "${item.options[selectedIndex]}". ${item.fact}`;
           feedbackEl.className = "feedback good";
         } else {
           answerButtons[selectedIndex].classList.add("wrong");
-          feedbackEl.textContent = `Not quite. ${item.fact}`;
+          feedbackEl.textContent = `Incorrect. You chose "${item.options[selectedIndex]}". The correct answer is "${item.options[item.answer]}". ${item.fact}`;
           feedbackEl.className = "feedback bad";
         }
+
+        const addStatus = (index, text) => {
+          const status = document.createElement("span");
+          status.className = "sr-only";
+          status.textContent = text;
+          answerButtons[index].appendChild(status);
+        };
+        if (!correct) addStatus(selectedIndex, " (your answer, incorrect)");
+        addStatus(item.answer, correct ? " (your answer, correct)" : " (correct answer)");
 
         nextButton.hidden = false;
         nextButton.focus();
@@ -677,6 +719,7 @@
         document.getElementById("results-title").textContent = title;
         resultsCopyEl.textContent = copy;
         finalScoreEl.textContent = `0 / ${questions.length}`;
+        setShareStatus("");
         quizView.hidden = true;
         resultsView.hidden = false;
         resultsView.focus();
@@ -704,10 +747,52 @@
         requestAnimationFrame(updateScore);
       }
 
+      function setShareStatus(message, type) {
+        shareStatusEl.textContent = message;
+        shareStatusEl.className = type ? `share-status ${type}` : "share-status";
+      }
+
+      function copyWithFallback(text) {
+        if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+        return new Promise((resolve, reject) => {
+          const area = document.createElement("textarea");
+          area.value = text;
+          area.setAttribute("readonly", "");
+          area.style.position = "fixed";
+          area.style.opacity = "0";
+          document.body.appendChild(area);
+          area.select();
+          let ok = false;
+          try { ok = document.execCommand("copy"); } catch (error) { ok = false; }
+          area.remove();
+          shareButton.focus();
+          ok ? resolve() : reject(new Error("Copy failed"));
+        });
+      }
+
+      async function shareResults() {
+        const title = document.getElementById("quiz-title").textContent.trim();
+        const text = `I scored ${score}/${questions.length} on "${title}" Can you beat me?`;
+        const url = /^https?:/.test(location.protocol) ? location.href : undefined;
+        try {
+          if (navigator.share) {
+            await navigator.share(url ? { title, text, url } : { title, text });
+            setShareStatus("Result shared.", "good");
+          } else {
+            await copyWithFallback(url ? `${text} ${url}` : text);
+            setShareStatus("Result copied to clipboard.", "good");
+          }
+        } catch (error) {
+          if (error && error.name === "AbortError") return;
+          setShareStatus("Sharing failed. Please copy your score manually.", "bad");
+        }
+      }
+
       function resetQuiz() {
         currentQuestion = 0;
         score = 0;
         scoreEl.textContent = "0";
+        setShareStatus("");
         quizView.hidden = false;
         resultsView.hidden = true;
         renderQuestion();
@@ -723,6 +808,7 @@
       });
 
       restartButton.addEventListener("click", resetQuiz);
+      shareButton.addEventListener("click", shareResults);
 
       document.addEventListener("keydown", (event) => {
         if (resultsView.hidden && !answered && /^[1-4]$/.test(event.key)) {
